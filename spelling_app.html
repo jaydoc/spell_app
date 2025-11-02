@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Spelling App — US Female Voice (Standalone)</title>
+  <style>
+    body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial, "Noto Sans", "Apple Color Emoji", "Segoe UI Emoji"; margin:0; background:#fafafa; color:#111; }
+    .container { max-width:1040px; margin:0 auto; padding:16px; }
+    .card { background:#fff; border-radius:16px; box-shadow:0 1px 4px rgba(0,0,0,.06); padding:16px; }
+    .btn { padding:8px 12px; border-radius:12px; background:#fff; border:1px solid #ddd; cursor:pointer; }
+    .btn.primary { background:#111; color:#fff; border-color:#111; }
+    .btn[disabled]{opacity:.6; cursor:not-allowed;}
+    input,select,textarea { border:1px solid #ddd; border-radius:12px; padding:8px 10px; outline:none; }
+    input:focus,select:focus,textarea:focus { box-shadow:0 0 0 3px rgba(0,0,0,.12); }
+    .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+    .grid { display:grid; gap:16px; }
+    @media (min-width:960px){ .grid-3{grid-template-columns:2fr 1fr;} .grid-2{grid-template-columns:1fr 1fr;} }
+    .chip { display:inline-block; margin:2px 6px 2px 0; font-size:12px; padding:2px 8px; border-radius:999px; background:#f4f4f5; border:1px solid #e4e4e7; }
+    .muted{ color:#6b7280; } .small{ font-size:12px; } .title{ font-weight:700; font-size:22px; }
+    .stat{ background:#fff; border-radius:16px; padding:12px; box-shadow:0 1px 4px rgba(0,0,0,.06); }
+    .stat .lbl{ font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:#6b7280; }
+    .stat .val{ font-size:18px; font-weight:600; }
+    .ok{ background:#ecfdf5; border:1px solid #a7f3d0; color:#065f46; }
+    .bad{ background:#fef2f2; border:1px solid #fecaca; color:#991b1b; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <!-- React + Babel (dev CDN build) -->
+  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <script type="text/babel">
+    const { useEffect, useMemo, useRef, useState } = React;
+    const STORAGE_KEY = "spelling_app_us_female_v2_standalone";
+
+    const DEFAULT_LIST = `tag — a chasing game
+send — to cause to go
+candy — sweet food with sugar
+scrunch — to squeeze together
+bucket — round vessel for water`;
+
+    const DIGRAPHS=["ch","sh","th","wh","ph","ck","ng","qu"];
+    const VOWEL_TEAMS=["ai","ay","ea","ee","oa","oe","oo","ou","ow","oi","oy","au","aw","ui","ue","ie","ei"];
+    const R_CONTROLLED=["ar","er","ir","or","ur"];
+    const COMMON_PREFIXES=["un","re","pre","mis","dis","non","over","under","inter","trans","sub","super","anti","auto"];
+    const COMMON_SUFFIXES=["ing","ed","es","s","ly","ful","less","ness","ment","tion","sion","ture","able","ible","al","ial","ous","eous","ious"];
+
+    function estimateSyllables(word){
+      const m=word.toLowerCase().match(/[aeiouy]+/g);
+      if(!m) return 1;
+      const e=/[aeiouy][^aeiouy]*e$/.test(word.toLowerCase());
+      let c=m.length-(e && m.length>1?1:0);
+      return Math.max(1,c);
+    }
+    function hasSilentEPattern(w){
+      return /(^|[^aeiou])[bcdfghjklmnpqrstvwxyz][aeiou][bcdfghjklmnpqrstvwxyz]e$/.test(w.toLowerCase());
+    }
+    function levenshtein(a,b){
+      const d=Array.from({length:a.length+1},()=>Array(b.length+1).fill(0));
+      for(let i=0;i<=a.length;i++) d[i][0]=i;
+      for(let j=0;j<=b.length;j++) d[0][j]=j;
+      for(let i=1;i<=a.length;i++){
+        for(let j=1;j<=b.length;j++){
+          const c=a[i-1]===b[j-1]?0:1;
+          d[i][j]=Math.min(d[i-1][j]+1,d[i][j-1]+1,d[i-1][j-1]+c);
+        }
+      }
+      return d[a.length][b.length];
+    }
+    function analyzeWord(word){
+      const w=word.toLowerCase();
+      return {
+        prefixes: COMMON_PREFIXES.filter(p=>w.startsWith(p)),
+        suffixes: COMMON_SUFFIXES.filter(s=>w.endsWith(s)),
+        digraphs: DIGRAPHS.filter(d=>w.includes(d)),
+        vowelTeams: VOWEL_TEAMS.filter(v=>w.includes(v)),
+        rControlled: R_CONTROLLED.filter(r=>w.includes(r)),
+        silentE: hasSilentEPattern(w),
+        syllables: estimateSyllables(w)
+      };
+    }
+
+    function fixMojibake(s){
+      let out=s;
+      out=out.replace(/â€”/g,'—').replace(/â€“/g,'–')
+             .replace(/â€˜/g,'‘').replace(/â€™/g,'’')
+             .replace(/â€œ/g,'“').replace(/â€\u009d/g,'”')
+             .replace(/â€¦/g,'…')
+             .replace(/Ã©/g,'é').replace(/Ãè/g,'è').replace(/Ãê/g,'ê')
+             .replace(/Ãë/g,'ë').replace(/Ãá/g,'á').replace(/Ã /g,'à')
+             .replace(/Ã¹/g,'ù').replace(/Ãº/g,'ú').replace(/Ã¼/g,'ü')
+             .replace(/Ã±/g,'ñ').replace(/Ãî/g,'î').replace(/Ãô/g,'ô')
+             .replace(/Ãö/g,'ö').replace(/Ã§/g,'ç').replace(/Ã¢/g,'â')
+             .replace(/hors dâ€™oeuvres/g,'hors d’œuvres')
+             .replace(/maÃ®tre dâ€™/g,'maître d’')
+             .replace(/pÃ¢tisserie/g,'pâtisserie')
+             .replace(/protÃ©gÃ©/g,'protégé')
+             .replace(/seÃ±or/g,'señor')
+             .replace(/roomâ€™s/g,"room’s")
+             .replace(/birdâ€™s/g,"bird’s");
+      out=out.replace(/[\u2019\u2018]/g,'’');
+      return out;
+    }
+    function cleanWord(w){
+      let out=fixMojibake(w.trim());
+      out=out.replace(/\((or [^)]*)\)/gi,' $1');    // keep "(or ...)" variants
+      out=out.replace(/\s*\((?!or\b)[^)]*\)/gi,''); // drop other notes
+      out=out.replace(/\s+/g,' ').trim();
+      return out;
+    }
+    function cleanDef(d){ return fixMojibake((d||'').trim()); }
+
+    function extract(raw){
+      const normalized=raw.replace(/[\u2019\u2018]/g,"'");
+      const lines=normalized.split(/\r?\n+/).map(s=>s.trim()).filter(Boolean);
+      const out=[]; const seen=new Set();
+      for(let ln of lines){
+        if(ln.includes('\t')){
+          const cols=ln.split('\t');
+          if(cols.length>=3){
+            const word=cleanWord(cols[2]);
+            const def=cleanDef(cols[3]||'');
+            const ok=/^[A-Za-z][A-Za-z'\-]*(?:\s+[A-Za-z][A-Za-z'\-]*)*$/.test(word);
+            if(!ok) continue;
+            const key=word.toLowerCase(); if(seen.has(key)) continue; seen.add(key);
+            out.push({word,def}); continue;
+          }
+        }
+        ln=ln.replace(/^\d+\s*[.)]?\s*/,"");
+        const parts=ln.split(/\s+—\s+|\s+-\s+/);
+        const word=cleanWord(parts[0]||''); if(!word) continue;
+        const ok=/^[A-Za-z][A-Za-z'\-]*(?:\s+[A-Za-z][A-Za-z'\-]*)*$/.test(word);
+        if(!ok) continue;
+        const def=cleanDef(parts.slice(1).join(' — '));
+        const key=word.toLowerCase(); if(seen.has(key)) continue; seen.add(key);
+        out.push({word,def});
+      }
+      return out;
+    }
+
+    function Stat({label,value}){
+      return (<div className="stat"><div className="lbl">{label}</div><div className="val">{value}</div></div>);
+    }
+    function Chip({children}){ return <span className="chip">{children}</span>; }
+
+    function VoicePicker({voices,voiceURI,setVoiceURI,rate,setRate,pitch,setPitch}){
+      const enUS=(voices||[]).filter(v=>/en[-_]US/i.test(v.lang||""));
+      const rest=(voices||[]).filter(v=>!enUS.includes(v));
+      return (
+        <div className="card">
+          <div className="lbl">Voice</div>
+          <div className="row" style={{gap:'8px'}}>
+            <select value={voiceURI} onChange={e=>setVoiceURI(e.target.value)} className="flex-1">
+              {[...enUS,...rest].map(v=>{
+                const id=v.voiceURI||v.name;
+                return <option key={id} value={id}>{v.name} — {v.lang}</option>;
+              })}
+            </select>
+            <div className="row">
+              <label className="small muted">Rate</label>
+              <input type="range" min={0.8} max={1.2} step={0.05} value={rate} onChange={e=>setRate(parseFloat(e.target.value))}/>
+              <label className="small muted">Pitch</label>
+              <input type="range" min={0.8} max={1.4} step={0.05} value={pitch} onChange={e=>setPitch(parseFloat(e.target.value))}/>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    function App(){
+      const [raw,setRaw]=useState(DEFAULT_LIST);
+      const [items,setItems]=useState([]);
+      const [mode,setMode]=useState("learn");
+      const [promptMode,setPromptMode]=useState("word");
+      const [idx,setIdx]=useState(0);
+      const [attempt,setAttempt]=useState("");
+      const [last,setLast]=useState(null);
+      const [stats,setStats]=useState({});
+      const [voices,setVoices]=useState([]);
+      const [voiceURI,setVoiceURI]=useState("");
+      const [rate,setRate]=useState(1);
+      const [pitch,setPitch]=useState(1.1);
+      const [selection,setSelection]=useState("");
+      const [overwriteDefs,setOverwriteDefs]=useState(false);
+      const [fetchBusy,setFetchBusy]=useState(false);
+      const [fetchProgress,setFetchProgress]=useState("");
+
+      const inputRef=useRef(null);
+
+      useEffect(()=>{
+        try{
+          const s=JSON.parse(localStorage.getItem(STORAGE_KEY)||"null");
+          if(s){
+            setRaw(s.raw||DEFAULT_LIST); setStats(s.stats||{});
+            setMode(s.mode||"learn"); setPromptMode(s.promptMode||"word");
+            setVoiceURI(s.voiceURI||""); setRate(s.rate??1); setPitch(s.pitch??1.1);
+            setSelection(s.selection||""); setOverwriteDefs(!!s.overwriteDefs);
+          }
+        }catch{}
+      },[]);
+      useEffect(()=>{ setItems(extract(raw)); },[raw]);
+      useEffect(()=>{
+        localStorage.setItem(STORAGE_KEY, JSON.stringify({raw,stats,mode,promptMode,voiceURI,rate,pitch,selection,overwriteDefs}));
+      },[raw,stats,mode,promptMode,voiceURI,rate,pitch,selection,overwriteDefs]);
+
+      useEffect(()=>{
+        function load(){
+          if(!('speechSynthesis' in window)) return;
+          const vs=window.speechSynthesis.getVoices();
+          setVoices(vs);
+          if(!voiceURI && vs.length){
+            const enUS=vs.filter(v=>/en[-_]US/i.test(v.lang||""));
+            const pref=enUS.find(v=>/Google US English|Samantha|Victoria|Allison|Joanna|Salli|Kendra|Kimberly/i.test(v.name||""))||enUS[0]||vs[0];
+            if(pref) setVoiceURI(pref.voiceURI||pref.name);
+          }
+        }
+        load();
+        if('speechSynthesis' in window){ window.speechSynthesis.onvoiceschanged=load; }
+      },[voiceURI]);
+
+      const voice=useMemo(()=> (voices||[]).find(v=>(v.voiceURI||v.name)===voiceURI) || (voices||[])[0], [voices,voiceURI]);
+
+      function parseSelection(spec,max){
+        if(!spec.trim()) return Array.from({length:max},(_,i)=>i+1);
+        const parts=spec.split(/[, \n]+/).filter(Boolean); const set=new Set();
+        for(const p of parts){
+          const m=p.match(/^(\d+)?\s*-\s*(\d+)?$/);
+          if(m){
+            const start=m[1]?parseInt(m[1],10):1;
+            const end=m[2]?parseInt(m[2],10):max;
+            for(let k=Math.max(1,start);k<=Math.min(max,end);k++) set.add(k);
+          } else if(/^\d+$/.test(p)){
+            const n=parseInt(p,10); if(n>=1 && n<=max) set.add(n);
+          }
+        }
+        return Array.from(set).sort((a,b)=>a-b);
+      }
+
+      const studyNumbers=useMemo(()=>parseSelection(selection,items.length),[selection,items.length]);
+      const view=useMemo(()=>items.filter((_,i)=>studyNumbers.includes(i+1)),[items,studyNumbers]);
+      const current=view[idx]||{word:"",def:""};
+      const analysis=useMemo(()=>analyzeWord(current.word||""),[current.word]);
+
+      function speak(text){
+        try{
+          if(!text||!('speechSynthesis' in window)) return;
+          const u=new SpeechSynthesisUtterance(text);
+          if(voice) u.voice=voice;
+          u.rate=rate; u.pitch=pitch; u.lang=(voice&&voice.lang)||"en-US";
+          window.speechSynthesis.cancel(); window.speechSynthesis.speak(u);
+        }catch{}
+      }
+      useEffect(()=>{
+        if(!view.length) return;
+        if(mode!=="test"){ speak(current.word); return; }
+        if(promptMode==='word') speak(current.word); else if(current.def) speak(current.def);
+      },[idx,view.length,mode,promptMode,voiceURI,rate,pitch]);
+
+      function next(i=null){
+        if(!view.length) return;
+        if(i!==null){ setIdx(i); setAttempt(""); setLast(null); return; }
+        const n=(idx+1)%view.length; setIdx(n); setAttempt(""); setLast(null);
+      }
+      function mark(word,field){
+        setStats(prev=>{
+          const s=prev[word]||{correct:0,wrong:0};
+          return {...prev,[word]:{...s,[field]:s[field]+1}};
+        });
+      }
+      function submit(e){
+        e?.preventDefault?.();
+        const exp=current.word, act=attempt.trim();
+        const ok=act.toLowerCase()===exp.toLowerCase();
+        const dist=levenshtein(act.toLowerCase(),exp.toLowerCase());
+        setLast({ok,exp,act,dist});
+        mark(exp, ok?"correct":"wrong");
+        if(ok){ setTimeout(()=>next(),250); } else { setTimeout(()=>inputRef.current?.focus?.(),0); }
+      }
+
+      async function fetchDefinition(word){
+        try{
+          const res=await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(word)}`);
+          if(!res.ok) return undefined;
+          const data=await res.json();
+          const entry=Array.isArray(data)?data[0]:undefined;
+          const meanings=entry?.meanings||[];
+          for(const m of meanings){
+            const d=m?.definitions?.[0]?.definition;
+            if(d && typeof d==='string') return d;
+          }
+          return undefined;
+        }catch{ return undefined; }
+      }
+      function updateRawWithDefs(raw,updates,overwrite=false){
+        const lines=raw.split(/\r?\n/); const out=[];
+        for(let ln of lines){
+          const original=ln;
+          const stripped=ln.trim().replace(/^\d+\s*[.)]?\s*/,"");
+          const parts=stripped.split(/\s+—\s+|\s+-\s+/);
+          const w=(parts[0]||"").trim();
+          if(!w){ out.push(original); continue; }
+          const key=w.toLowerCase();
+          const newDef=updates[key];
+          if(!newDef){ out.push(original); continue; }
+          const hadDef=parts.length>1 && parts.slice(1).join(" — ").trim().length>0;
+          if(hadDef && !overwrite){ out.push(original); continue; }
+          out.push(`${w} — ${newDef}`);
+        }
+        return out.join("\n");
+      }
+      async function autoDefineStudySet(){
+        if(fetchBusy) return;
+        setFetchBusy(true); setFetchProgress("Starting…");
+        try{
+          const updates={}; const work=[...view];
+          for(let i=0;i<work.length;i++){
+            const it=work[i];
+            setFetchProgress(`Fetching ${i+1}/${work.length}: ${it.word}`);
+            if(!overwriteDefs && it.def) { continue; }
+            const def=await fetchDefinition(it.word);
+            if(def){ updates[it.word.toLowerCase()]=def; }
+            await new Promise(r=>setTimeout(r,120));
+          }
+          if(Object.keys(updates).length){
+            const updatedRaw=updateRawWithDefs(raw,updates,overwriteDefs);
+            setRaw(updatedRaw);
+            setFetchProgress(`Updated ${Object.keys(updates).length} definition(s).`);
+          } else {
+            setFetchProgress("No updates.");
+          }
+        } finally { setTimeout(()=>setFetchBusy(false),300); }
+      }
+
+      const accuracy=useMemo(()=>{
+        const t=Object.values(stats).reduce((a,{correct,wrong})=>{ a.c+=correct; a.w+=wrong; return a; },{c:0,w:0});
+        const d=t.c+t.w; return d?Math.round((t.c/d)*100):0;
+      },[stats]);
+      const posLabel=view.length?`${idx+1}/${view.length}  (from ${items.length} words)`:`0/0`;
+
+      return (
+        <div className="container">
+          <div className="row" style={{justifyContent:'space-between', alignItems:'flex-end', marginBottom:'12px'}}>
+            <div>
+              <div className="title">Spelling App — US Female Voice</div>
+              <div className="small muted">Standalone build (paste TSV/lines; meanings optional)</div>
+            </div>
+            <div className="row">
+              <button className={"btn "+(mode==='learn'?'primary':'')} onClick={()=>setMode('learn')}>Learn</button>
+              <button className={"btn "+(mode==='test'?'primary':'')} onClick={()=>setMode('test')}>Test</button>
+              <select value={promptMode} onChange={e=>setPromptMode(e.target.value)} className="btn">
+                <option value="word">Prompt: Word</option>
+                <option value="definition">Prompt: Definition</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="grid grid-2" style={{marginBottom:'12px'}}>
+            <Stat label="Words" value={items.length}/>
+            <Stat label="In study set" value={view.length}/>
+            <Stat label="Accuracy" value={accuracy+"%"}/>
+            <VoicePicker voices={voices} voiceURI={voiceURI} setVoiceURI={setVoiceURI} rate={rate} setRate={setRate} pitch={pitch} setPitch={setPitch}/>
+          </div>
+
+          <div className="grid grid-3">
+            <div className="card">
+              <div className="row" style={{justifyContent:'space-between'}}>
+                <div className="small muted">Current word</div>
+                <div className="row">
+                  <button className="btn" onClick={()=>speak(promptMode==='word'? current.word : (current.def||current.word))}>🔊 Speak</button>
+                  <button className="btn" onClick={()=>next()}>➡️ Next</button>
+                </div>
+              </div>
+              <div style={{fontSize:'30px', fontWeight:600, margin:'6px 0'}}>
+                {mode==='learn' ? (
+                  current.word
+                ) : (
+                  promptMode==='word' ? "•".repeat(Math.max(4,Math.min(12,(current.word||"").length))) : (
+                    <span style={{fontSize:'18px', fontWeight:500}}>{current.def || <em className="muted">(no definition provided)</em>}</span>
+                  )
+                )}
+              </div>
+              {mode==='learn' && current.def && (
+                <div className="small" style={{marginBottom:'8px'}}>Definition: <b>{current.def}</b></div>
+              )}
+              <div className="small muted">{posLabel}</div>
+
+              <div className="small" style={{marginTop:'10px'}}>
+                <div>Patterns for <b>{current.word}</b>:</div>
+                <div style={{marginTop:'6px'}}>
+                  {analysis.prefixes.length>0 && <span className="chip">Prefix: {analysis.prefixes.join(', ')}</span>}
+                  {analysis.suffixes.length>0 && <span className="chip">Suffix: {analysis.suffixes.join(', ')}</span>}
+                  {analysis.digraphs.length>0 && <span className="chip">Digraph: {analysis.digraphs.join(', ')}</span>}
+                  {analysis.vowelTeams.length>0 && <span className="chip">Vowel team: {analysis.vowelTeams.join(', ')}</span>}
+                  {analysis.rControlled.length>0 && <span className="chip">R-controlled: {analysis.rControlled.join(', ')}</span>}
+                  {analysis.silentE && <span className="chip">Silent-e</span>}
+                  <span className="chip">{analysis.syllables} {analysis.syllables===1?'syllable':'syllables'}</span>
+                </div>
+              </div>
+
+              <form onSubmit={submit} style={{marginTop:'10px'}}>
+                <label className="small muted">Type the spelling and press Enter</label>
+                <input ref={inputRef} style={{width:'100%', marginTop:'6px'}} value={attempt} onChange={e=>setAttempt(e.target.value)} onKeyDown={e=>{ if(e.key==='Escape') setAttempt(""); }}/>
+                <div className="row" style={{marginTop:'8px'}}>
+                  <button type="submit" className="btn primary">Check</button>
+                  <button type="button" className="btn" onClick={()=>{ setAttempt(""); next(); }}>Skip</button>
+                </div>
+              </form>
+
+              {last && (
+                <div className={"card "+(last.ok?'ok':'bad')} style={{marginTop:'10px'}}>
+                  {last.ok ? (
+                    <div><b>Correct!</b> “{last.exp}”</div>
+                  ) : (
+                    <div>
+                      <div><b>Not quite.</b></div>
+                      <div className="small">Distance: {last.dist}</div>
+                      <div className="small">Correct: <b>{last.exp}</b></div>
+                      {current.def && <div className="small muted">Definition: <b>{current.def}</b></div>}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className="card">
+              <h3 style={{margin:'0 0 6px 0'}}>Settings</h3>
+              <div className="small">Word list (one per line, “word — definition”, or TSV with word in col 3, def in col 4)</div>
+              <textarea style={{width:'100%', height:'170px', marginTop:'6px'}} value={raw} onChange={e=>setRaw(e.target.value)}></textarea>
+              <div className="row" style={{marginTop:'6px'}}>
+                <button className="btn" onClick={()=>setRaw(DEFAULT_LIST)}>Load sample</button>
+                {/* Clipboard guard to avoid NotAllowedError */}
+                <button className="btn" onClick={()=>{ try { navigator.clipboard.writeText(raw); } catch(e){ console.warn('Clipboard blocked:', e); alert('Copy blocked by browser policy. Select the text and copy manually.'); } }}>Copy</button>
+              </div>
+
+              <div style={{marginTop:'12px'}}>
+                <div className="small" style={{fontWeight:600}}>Study set by numbers</div>
+                <input style={{width:'100%', marginTop:'4px'}} placeholder="e.g., 1-50, 78, 120-150 (leave empty = all)" value={selection} onChange={e=>{ setSelection(e.target.value); setIdx(0); }}/>
+                <div className="small muted" style={{marginTop:'4px'}}>Currently studying {view.length} / {items.length}</div>
+              </div>
+
+              <div style={{marginTop:'12px'}}>
+                <div className="small" style={{fontWeight:600, marginBottom:'4px'}}>Jump within study set</div>
+                <div style={{maxHeight:'140px', overflow:'auto'}}>
+                  {view.map((it,i)=> (
+                    <button key={i} onClick={()=>next(i)} className="btn" style={{display:'block', width:'100%', textAlign:'left', marginBottom:'6px'}}>
+                      <span className="muted">#{i+1}</span> {it.word}{stats[it.word]?.wrong>0 && (<span style={{color:'#dc2626'}}> ×{stats[it.word].wrong}</span>)}
+                    </button>
+                  ))}
+                </div>
+                <div className="small muted" style={{marginTop:'4px'}}>Position shown is index inside the filtered set.</div>
+              </div>
+
+              <div style={{marginTop:'12px'}}>
+                <div className="small" style={{fontWeight:600, marginBottom:'4px'}}>Auto-fetch meanings (dictionaryapi.dev)</div>
+                <div className="row">
+                  <label className="small"><input type="checkbox" checked={overwriteDefs} onChange={e=>setOverwriteDefs(e.target.checked)}/> Overwrite existing meanings</label>
+                  <button className="btn" disabled={fetchBusy || !view.length} onClick={autoDefineStudySet}>{fetchBusy? 'Fetching…' : 'Fetch for study set'}</button>
+                  {fetchProgress && <span className="small muted">{fetchProgress}</span>}
+                </div>
+                <div className="small muted" style={{marginTop:'4px'}}>Uses a free API; results vary by word. Writes back into the list above.</div>
+              </div>
+            </div>
+
+            <div className="card">
+              <h3 style={{marginTop:0}}>Pattern Hints</h3>
+              <div className="small">
+                <div>• Digraphs: ch, sh, th, wh, ph, ck, ng, qu</div>
+                <div>• Vowel teams: ai, ay, ea, ee, oa, oe, oo, ou, ow, oi, oy, au, aw, ui, ue, ie, ei</div>
+                <div>• R-controlled: ar, er, ir, or, ur</div>
+                <div>• Silent-e (CVCe) pattern</div>
+              </div>
+            </div>
+          </div>
+
+          <div className="small muted" style={{margin:18}}>Voices depend on your browser/OS. This app auto-picks an en-US female/neutral voice when available.</div>
+        </div>
+      );
+    }
+
+    // Self-tests
+    try{
+      console.assert(levenshtein('test','test')===0,'levenshtein');
+      const sample=extract('1. apple — fruit\nbanana\n3) cherry - red');
+      console.assert(sample.length===3 && sample[0].word==='apple' && sample[1].word==='banana' && sample[2].word==='cherry','extract');
+      const a=analyzeWord('baker'); console.assert(typeof a.syllables==='number','analyzeWord');
+    }catch(e){ console.warn('Self-test failed:', e); }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+  </script>
+</body>
+</html>
